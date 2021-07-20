@@ -12,7 +12,6 @@ type ValueKind =
     | ThisValue of typ: Type
 //    | BaseValue of boundIdent: Ident option * typ: Type
     | Null of typ: Type
-    | UnitConstant
     | BoolConstant of value: bool
     | CharConstant of value: char
     | StringConstant of value: string
@@ -22,7 +21,6 @@ type ValueKind =
         | ThisValue t
 //        | BaseValue(_,t) -> t
         | Null t -> t
-        | UnitConstant -> Unit
         | BoolConstant _ -> Boolean
         | CharConstant _ -> Char
         | StringConstant _ -> String
@@ -40,13 +38,13 @@ type Expression =
 //    | Call of callee: Expression * info: CallInfo * typ: Type * range: SourceLocation option
     | Operation of kind: OperationKind * typ: Type * range: SourceLocation option
     // Throw can be a expression or a statement depending on the language
-    | Throw of expr: Expression * typ: Type
+    | Throw of expr: Expression * isRethrow: bool * typ: Type * range: SourceLocation option
     member this.Type =
         match this with
         | Value (kind, _) -> kind.Type
         | IdentExpr id -> id.Type
         | Operation (_, t, _)
-        | Throw(_,t) -> t
+        | Throw(_,_,t,_) -> t
 //        | Call(_,_,t,_)
 
 type Statement =
@@ -54,12 +52,12 @@ type Statement =
     | ExpressionStatement of Expression
     | Break of label: string option
     | Set of Expression * kind: SetKind * typ: Type * value: Expression * range: SourceLocation option
+    | IfThenElse of guardStat: Expression * thenStatements: Statement list * elseStatements: Statement list * range: SourceLocation option
 //    | IdentDeclaration of ident: Ident * value: Expression
 //    | Switch of Expression * cases: (Expression * Statement list) list * defaultCase: Statement list * range: SourceLocation option
 //    | WhileLoop of guard: Expression * body: Expression * label: string option * range: SourceLocation option
 //    | ForLoop of ident: Ident * start: Expression * limit: Expression * body: Expression * isUp: bool * range: SourceLocation option
 //    | TryCatch of body: Expression * catch: (Ident * Expression) option * finalizer: Expression option * range: SourceLocation option
-//    | IfThenElse of guardExpr: Expression * thenExpr: Expression * elseExpr: Expression * range: SourceLocation option
 
 type MemberDecl = {
     Name: string

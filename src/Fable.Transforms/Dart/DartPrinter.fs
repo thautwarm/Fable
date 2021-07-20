@@ -3,6 +3,7 @@
 open System
 open Fable.AST
 open Fable.AST.Fable
+open Fable.AST.Python
 open Fable.AST.Statements
 
 type Writer =
@@ -118,18 +119,21 @@ module PrinterExtensions =
                 printer.Print(s)
                 printSeparator |> Option.iter (fun f -> f printer)
 
-        member printer.Print(t: Type) =
+        member printer.Print(t: Type, ?isReturn) =
+            let isReturn = defaultArg isReturn false
             match t with
+            | Unit -> printer.Print(if isReturn then "void" else "Object")
             | Any -> printer.Print("Object")
-            | Unit -> printer.Print("null")
             | Boolean -> printer.Print("bool")
-            | Char -> printer.Print("null")
-            | String -> printer.Print("String")
+            | Char | String -> printer.Print("String")
             | Number(kind,_) ->
                 match kind with
                 | Int8 | UInt8 | Int16 | UInt16 | Int32 | UInt32 -> printer.Print("int")
                 | Float32 | Float64 -> printer.Print("double")
-            | _ -> printer.AddError("TODO: Print type")
+
+            // TODO
+            | DeclaredType(ref, _genArgs) -> printer.Print(ref.FullName.[ref.FullName.LastIndexOf('.') + 1..])
+            | _ -> printer.AddError($"TODO: Print type %A{t}")
 
         // TODO
         member printer.ComplexExpressionWithParens(expr: Expression) =
@@ -203,16 +207,41 @@ module PrinterExtensions =
                     | value -> value
                 printer.Print(value)
             | ThisValue _ -> printer.Print("this")
-            | Null _ | UnitConstant -> printer.Print("null")
+            | Null _ -> printer.Print("null")
 
         member printer.Print(expr: Expression) =
             match expr with
             | IdentExpr i -> printer.Print(i.Name)
             | Value(kind,_) -> printer.PrintValue(kind)
             | Operation(kind,_,_) -> printer.PrintOperation(kind)
-            | Throw(e,_) ->
+            | Throw(e,_,_,_) ->
                 printer.Print("throw ")
                 printer.Print(e)
+
+        member printer.PrintIfStatment(test: Expression, consequent, alternate) =
+            printer.Print("if (")
+            printer.Print(test)
+            printer.Print(") ")
+            printer.PrintBlock(consequent)
+            match alternate with
+            | [] -> ()
+            | alternate ->
+                if printer.Column > 0 then printer.Print(" ")
+                match alternate with
+                | [IfThenElse(test, consequent, alternate, _loc)] ->
+                    printer.Print("else ")
+                    printer.PrintIfStatment(test, consequent, alternate)
+                | statements ->
+                    // Get productive statements and skip `else` if they're empty
+                    statements
+                    |> List.filter printer.IsProductiveStatement
+                    |> function
+                        | [] -> ()
+                        | statements ->
+                            printer.Print("else ")
+                            printer.PrintBlock(statements)
+            if printer.Column > 0 then
+                printer.PrintNewLine()
 
         member printer.Print(statement: Statement) =
             match statement with
@@ -235,6 +264,8 @@ module PrinterExtensions =
                 | ValueSet -> ()
                 printer.Print(" = ")
                 printer.Print(value)
+            | IfThenElse(test, consequent, alternate, _loc) ->
+                printer.PrintIfStatment(test, consequent, alternate)
 
         member printer.PrintArray(items: 'a array, printItem: Printer -> 'a -> unit, printSeparator: Printer -> unit) =
             for i = 0 to items.Length - 1 do
@@ -250,7 +281,7 @@ module PrinterExtensions =
             ), (fun p -> p.Print(", ")))
 
         member printer.PrintFunctionDeclaration(name: string, args: Ident list, body: Statement list, typ: Type) =
-            printer.Print(typ)
+            printer.Print(typ, isReturn=true)
             printer.Print(" ")
             printer.Print(name)
             printer.Print("(")

@@ -37,7 +37,7 @@ type Context =
     OptimizeTailCall: unit -> unit
     ScopedTypeParams: Set<string> }
 
-type IExtendedCompiler =
+type IStatementsCompiler =
     inherit Compiler
     abstract GetAllImports: unit -> Import list
     abstract GetImportExpr: Context * selector: string * path: string * SourceLocation option -> Expression
@@ -48,7 +48,7 @@ type IExtendedCompiler =
     abstract WarnOnlyOnce: string * ?range: SourceLocation -> unit
 
 module Util =
-    let (|TransformExpr|) (com: IExtendedCompiler) ctx e =
+    let (|TransformExpr|) (com: IStatementsCompiler) ctx e =
         com.TransformAsExpr(ctx, e)
 
     let (|Function|_|) = function
@@ -60,6 +60,16 @@ module Util =
         | Fable.Let(ident, value, body) -> Some([ident, value], body)
         | Fable.LetRec(bindings, body) -> Some(bindings, body)
         | _ -> None
+
+    let makeNull t =
+        Value(Null t, None)
+
+    let makeUntypedNull() =
+        makeNull Fable.Any
+
+    let addErrorAndReturnNull (com: Compiler) (range: SourceLocation option) (error: string) =
+        addError com [] range error
+        makeUntypedNull()
 
     let discardUnitArg (args: Fable.Ident list) =
         match args with
@@ -107,14 +117,13 @@ module Util =
 
         | Fable.TypeCast(e,_) -> isStatement ctx preferStatement e
 
-        | Fable.Set _ -> true // TODO: Depends on language target
+        // TODO: These depend on language target
+        | Fable.Set _ -> true
+        | Fable.Throw _ -> false
 
         | Fable.TryCatch _
         | Fable.Sequential _ | Fable.Let _ | Fable.LetRec _
         | Fable.ForLoop _ | Fable.WhileLoop _ -> true
-
-        // TODO: Depending on the target language throw can be expression or statement
-        | Fable.Throw _ -> false
 
         // TODO: If IsSatement is false, still try to infer it? See #2414
         // /^\s*(break|continue|debugger|while|for|switch|if|try|let|const|var)\b/
@@ -133,7 +142,7 @@ module Util =
         | Fable.IfThenElse(_,thenExpr,elseExpr,_) ->
             preferStatement || isStatement ctx false thenExpr || isStatement ctx false elseExpr
 
-//    let optimizeTailCall (com: IExtendedCompiler) (ctx: Context) range (tc: ITailCallOpportunity) args =
+//    let optimizeTailCall (com: IStatementsCompiler) (ctx: Context) range (tc: ITailCallOpportunity) args =
 //        let rec checkCrossRefs tempVars allArgs = function
 //            | [] -> tempVars
 //            | (argId, _arg)::rest ->
@@ -163,27 +172,14 @@ module Util =
 //            yield Statement.continueStatement(Identifier.identifier(tc.Label), ?loc=range)
 //        |]
 
-//    let transformImport (com: IExtendedCompiler) ctx r (selector: string) (path: string) =
+//    let transformImport (com: IStatementsCompiler) ctx r (selector: string) (path: string) =
 //        let selector, parts =
 //            let parts = Array.toList(selector.Split('.'))
 //            parts.Head, parts.Tail
 //        com.GetImportExpr(ctx, selector, path, r)
 //        |> getParts parts
 
-    let transformValue (com: IExtendedCompiler) (ctx: Context) r value: ValueKind =
-        match value with
-        | Fable.ThisValue t -> ThisValue t
-//        | Fable.BaseValue _
-        | Fable.Null _
-        | Fable.UnitConstant -> UnitConstant
-        | Fable.BoolConstant v -> BoolConstant v
-        | Fable.CharConstant v -> CharConstant v
-        | Fable.StringConstant v -> StringConstant v
-        | Fable.NumberConstant(v, k, uom) -> NumberConstant(v, k, uom)
-//        | Fable.RegexConstant v -> value
-        | _ -> Null Fable.Any // TODO
-
-//    let transformCallArgs (com: IExtendedCompiler) ctx hasSpread args =
+//    let transformCallArgs (com: IStatementsCompiler) ctx hasSpread args =
 //        match args with
 //        | []
 //        | [MaybeCasted(Fable.Value(Fable.UnitConstant,_))] -> []
@@ -198,14 +194,14 @@ module Util =
 //                rest @ [Expression.spreadElement(com.TransformAsExpr(ctx, last))]
 //        | args -> List.map (fun e -> com.TransformAsExpr(ctx, e)) args
 
-    let resolveExpr t strategy expr: Statement =
+    let resolveExpr strategy expr: Statement =
         match strategy with
         | None | Some ReturnUnit -> ExpressionStatement expr
         | Some ReturnExpr -> Return expr
         | Some(Assign left) -> Set(left, ValueSet, left.Type, expr, None)
         | Some(Target left) -> Set(IdentExpr left, ValueSet, left.Type, expr, None)
 
-//    let transformCall (com: IExtendedCompiler) ctx range callee (callInfo: Fable.CallInfo) =
+//    let transformCall (com: IStatementsCompiler) ctx range callee (callInfo: Fable.CallInfo) =
 //        let callee = com.TransformAsExpr(ctx, callee)
 //        let args = transformCallArgs com ctx callInfo.HasSpread callInfo.Args
 //        match callInfo.ThisArg with
@@ -218,7 +214,7 @@ module Util =
         elif List.sameLength idents values then List.zip idents values
         else failwith "Target idents/values lengths differ"
 
-    let getDecisionTargetAndBindValues (com: IExtendedCompiler) (ctx: Context) targetIndex boundValues =
+    let getDecisionTargetAndBindValues (com: IStatementsCompiler) (ctx: Context) targetIndex boundValues =
         let idents, target = getDecisionTarget ctx targetIndex
         let identsAndValues = matchTargetIdentAndValues idents boundValues
         if not com.Options.DebugMode then
@@ -234,7 +230,7 @@ module Util =
         else
             identsAndValues, target
 
-    let transformDecisionTreeSuccessAsExpr (com: IExtendedCompiler) (ctx: Context) targetIndex boundValues =
+    let transformDecisionTreeSuccessAsExpr (com: IStatementsCompiler) (ctx: Context) targetIndex boundValues =
         let bindings, target = getDecisionTargetAndBindValues com ctx targetIndex boundValues
         match bindings with
         | [] -> com.TransformAsExpr(ctx, target)
@@ -242,7 +238,7 @@ module Util =
             let target = List.rev bindings |> List.fold (fun e (i,v) -> Fable.Let(i,v,e)) target
             com.TransformAsExpr(ctx, target)
 
-//    let transformDecisionTreeSuccessAsStatements (com: IExtendedCompiler) (ctx: Context) returnStrategy targetIndex boundValues: Statement[] =
+//    let transformDecisionTreeSuccessAsStatements (com: IStatementsCompiler) (ctx: Context) returnStrategy targetIndex boundValues: Statement[] =
 //        match returnStrategy with
 //        | Some(Target targetId) as target ->
 //            let idents, _ = getDecisionTarget ctx targetIndex
@@ -291,7 +287,7 @@ module Util =
             | None -> None
         | _ -> None
 
-    let transformDecisionTreeAsExpr (com: IExtendedCompiler) (ctx: Context) targets expr =
+    let transformDecisionTreeAsExpr (com: IStatementsCompiler) (ctx: Context) targets expr =
         // TODO: Check if some targets are referenced multiple times
         let ctx = { ctx with DecisionTargets = targets }
         com.TransformAsExpr(ctx, expr)
@@ -342,7 +338,7 @@ module Util =
 
     /// When several branches share target create first a switch to get the target index and bind value
     /// and another to execute the actual target
-//    let transformDecisionTreeWithTwoSwitches (com: IExtendedCompiler) ctx returnStrategy
+//    let transformDecisionTreeWithTwoSwitches (com: IStatementsCompiler) ctx returnStrategy
 //                    (targets: (Fable.Ident list * Fable.Expr) list) treeExpr =
 //        // Declare target and bound idents
 //        let targetId = getUniqueNameInDeclarationScope ctx "pattern_matching_result" |> makeIdent
@@ -368,7 +364,7 @@ module Util =
 //            let decisionTree = com.TransformAsStatements(ctx, Some targetAssign, treeExpr)
 //            [| yield multiVarDecl; yield! decisionTree; yield switch2 |]
 
-//    let transformDecisionTreeAsStatements (com: IExtendedCompiler) (ctx: Context) returnStrategy
+//    let transformDecisionTreeAsStatements (com: IStatementsCompiler) (ctx: Context) returnStrategy
 //                        (targets: (Fable.Ident list * Fable.Expr) list) (treeExpr: Fable.Expr): Statement[] =
 //        // If some targets are referenced multiple times, hoist bound idents,
 //        // resolve the decision index and compile the targets as a switch
@@ -383,7 +379,117 @@ module Util =
 //                let t = treeExpr.Type
 //                let cases = cases |> List.map (fun (caseExpr, targetIndex, boundValues) ->
 
-    let rec transformDeclaration (com: IExtendedCompiler) ctx decl =
+    let transformValue (com: IStatementsCompiler) (ctx: Context) r value: Expression =
+        let makeValue k = Value(k, r)
+
+        match value with
+//        | Fable.BaseValue(None,_) -> Super(None)
+//        | Fable.BaseValue(Some boundIdent,_) -> identAsExpr boundIdent
+//        | Fable.TypeInfo t -> transformTypeInfo com ctx r Map.empty t
+        | Fable.ThisValue t -> ThisValue t |> makeValue
+        | Fable.Null t -> Null t |> makeValue
+        | Fable.UnitConstant -> Null Fable.Unit |> makeValue
+        | Fable.CharConstant v -> CharConstant v |> makeValue
+        | Fable.StringConstant v -> StringConstant v |> makeValue
+        | Fable.BoolConstant v -> BoolConstant v |> makeValue
+        | Fable.NumberConstant(v, k, uom) -> NumberConstant(v, k, uom) |> makeValue
+        | _ -> addErrorAndReturnNull com None $"TODO: value %A{value}"
+
+    let transformOperation com ctx range typ opKind: Expression =
+        let makeOp k = Operation(k, typ, range)
+
+        match opKind with
+        | Fable.Unary(op, TransformExpr com ctx expr) -> Unary(op, expr) |> makeOp
+        | Fable.Binary(op, TransformExpr com ctx left, TransformExpr com ctx right) -> Binary(op, left, right) |> makeOp
+        | Fable.Logical(op, TransformExpr com ctx left, TransformExpr com ctx right) -> Logical(op, left, right) |> makeOp
+
+    let rec transformAsExpr (com: IStatementsCompiler) ctx (expr: Fable.Expr): Expression =
+        match expr with
+        | Fable.Value(kind, r) -> let k = transformValue com ctx r kind in k
+
+        | Fable.IdentExpr id -> IdentExpr id
+
+        | Fable.Operation(kind, typ, r) -> transformOperation com ctx r typ kind
+
+        | Fable.IfThenElse(TransformExpr com ctx guardExpr,
+                           TransformExpr com ctx thenExpr,
+                           TransformExpr com ctx elseExpr, r) ->
+            Operation(Ternary(guardExpr, thenExpr, elseExpr), expr.Type, r)
+
+        | _ -> addErrorAndReturnNull com None $"TODO: expression %A{expr}"
+
+    // When expecting a block, it's usually not necessary to wrap it
+    // in a lambda to isolate its variable context
+    let transformBlock (com: IStatementsCompiler) ctx ret expr: Statement list =
+        com.TransformAsStatements(ctx, ret, expr)
+
+    let rec transformIfStatement (com: IStatementsCompiler) ctx r ret guardExpr thenStmnt elseStmnt =
+        match com.TransformAsExpr(ctx, guardExpr) with
+        | Value(BoolConstant value, _) ->
+            if value then com.TransformAsStatements(ctx, ret, thenStmnt)
+            else com.TransformAsStatements(ctx, ret, elseStmnt)
+        | guardExpr ->
+            let thenStmnt = transformBlock com ctx ret thenStmnt
+            match elseStmnt with
+            | Fable.Value(Fable.UnitConstant, _) ->
+                [IfThenElse(guardExpr, thenStmnt, [], r)]
+            | _ ->
+                let elseStmnt = com.TransformAsStatements(ctx, ret, elseStmnt)
+                [IfThenElse(guardExpr, thenStmnt, elseStmnt, r)]
+
+    let rec transformAsStatements (com: IStatementsCompiler) ctx returnStrategy (expr: Fable.Expr): Statement list =
+        match expr with
+        | Fable.Throw(TransformExpr com ctx e, isRethrow, t, r) ->
+            [Throw(e, isRethrow, t, r) |> ExpressionStatement]
+
+        | Fable.Value(kind, r) ->
+            [transformValue com ctx r kind |> resolveExpr returnStrategy]
+
+        | Fable.IdentExpr id ->
+            [IdentExpr id |> resolveExpr returnStrategy]
+
+        | Fable.Operation(kind, typ, r) ->
+            [transformOperation com ctx r typ kind |> resolveExpr returnStrategy]
+
+//                | Fable.IfThenElse(TransformExpr com ctx guardExpr,
+//                           TransformExpr com ctx thenExpr,
+//                           TransformExpr com ctx elseExpr, r) ->
+
+        | Fable.Set(TransformExpr com ctx expr, kind, typ, TransformExpr com ctx value, r) ->
+            let kind =
+                match kind with
+                | Fable.ExprSet(TransformExpr com ctx expr) -> ExprSet expr
+                | Fable.FieldSet field -> FieldSet field
+                | Fable.ValueSet -> ValueSet
+            [Set(expr, kind, typ, value, r)]
+
+        | Fable.IfThenElse(guardExpr, thenExpr, elseExpr, r) ->
+            let asStatement =
+                match returnStrategy with
+                | None | Some ReturnUnit -> true
+                | Some(Target _) -> true // Compile as statement so values can be bound
+                | Some(Assign _) -> (isStatement ctx false thenExpr) || (isStatement ctx false elseExpr)
+                | Some ReturnExpr ->
+                    Option.isSome ctx.TailCallOpportunity
+                    || (isStatement ctx false thenExpr) || (isStatement ctx false elseExpr)
+            if asStatement then
+                transformIfStatement com ctx r returnStrategy guardExpr thenExpr elseExpr
+            else
+                let guardExpr' = transformAsExpr com ctx guardExpr
+                let thenExpr' = transformAsExpr com ctx thenExpr
+                let elseExpr' = transformAsExpr com ctx elseExpr
+                [Operation(Ternary(guardExpr', thenExpr', elseExpr'), expr.Type, r) |> resolveExpr returnStrategy]
+
+        | Fable.Sequential statements ->
+            let lasti = (List.length statements) - 1
+            statements |> List.mapi (fun i statement ->
+                let ret = if i < lasti then None else returnStrategy
+                com.TransformAsStatements(ctx, ret, statement))
+            |> List.concat
+
+        | _ -> [addErrorAndReturnNull com None $"TODO: statement %A{expr}" |> resolveExpr returnStrategy]
+
+    let rec transformDeclaration (com: IStatementsCompiler) ctx decl =
         let withCurrentScope (ctx: Context) (usedNames: Set<string>) f =
             let ctx = { ctx with UsedNames = { ctx.UsedNames with CurrentDeclarationScope = HashSet usedNames } }
             let result = f ctx
@@ -399,7 +505,7 @@ module Util =
                     Name = memb.Name
                     FullDisplayName = memb.FullDisplayName
                     Args = memb.Args
-                    Body = [] // [Return memb.Body] // TODO HACK: For now we just put Return in front of the expression
+                    Body = transformAsStatements com ctx (Some ReturnExpr) memb.Body
                     Type = memb.Body.Type
                     Info = memb.Info
                     UsedNames = memb.UsedNames
@@ -426,11 +532,11 @@ module Util =
 module Compiler =
     open Util
 
-    type BabelCompiler (com: Compiler) =
+    type StatementsCompiler (com: Compiler) =
         let onlyOnceWarnings = HashSet<string>()
         let imports = Dictionary<string,Import>()
 
-        interface IExtendedCompiler with
+        interface IStatementsCompiler with
             member _.WarnOnlyOnce(msg, ?range) =
                 if onlyOnceWarnings.Add(msg) then
                     addWarning com [] range msg
@@ -442,7 +548,7 @@ module Compiler =
                 | true, i ->
                     match i.LocalIdent with
                     | Some localIdent -> makeIdent localIdent |> IdentExpr
-                    | None -> Value(Null Fable.Any, None)
+                    | None -> makeUntypedNull()
                 | false, _ ->
                     let localId = getIdentForImport ctx path selector
                     let i =
@@ -456,10 +562,10 @@ module Compiler =
                     imports.Add(cachedName, i)
                     match localId with
                     | Some localId -> makeIdent localId |> IdentExpr // TODO: type
-                    | None -> Value(Null Fable.Any, None)
+                    | None -> makeUntypedNull()
             member _.GetAllImports() = imports.Values |> Seq.toList
-            member bcom.TransformAsExpr(ctx, e) = failwith "todo" //transformAsExpr bcom ctx e
-            member bcom.TransformAsStatements(ctx, ret, e) = failwith "todo" //transformAsStatements bcom ctx ret e
+            member bcom.TransformAsExpr(ctx, e) = transformAsExpr bcom ctx e
+            member bcom.TransformAsStatements(ctx, ret, e) = transformAsStatements bcom ctx ret e
             member bcom.TransformFunction(ctx, name, args, body) = failwith "todo" //transformFunction bcom ctx name args body
             member bcom.TransformImport(ctx, selector, path) = failwith "todo" //transformImport bcom ctx None selector path
 
@@ -478,10 +584,10 @@ module Compiler =
             member _.AddLog(msg, severity, ?range, ?fileName:string, ?tag: string) =
                 com.AddLog(msg, severity, ?range=range, ?fileName=fileName, ?tag=tag)
 
-    let makeCompiler com = BabelCompiler(com)
+    let makeCompiler com = StatementsCompiler(com)
 
     let transformFile (com: Compiler) (file: Fable.File) =
-        let com = makeCompiler com :> IExtendedCompiler
+        let com = makeCompiler com :> IStatementsCompiler
         let declScopes =
             let hs = HashSet()
             for decl in file.Declarations do
