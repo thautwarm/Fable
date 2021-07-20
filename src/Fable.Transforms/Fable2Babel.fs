@@ -591,18 +591,13 @@ module Util =
         | Fable.Value _ | Fable.Import _  | Fable.IdentExpr _
         | Fable.Lambda _ | Fable.Delegate _ | Fable.ObjectExpr _
         | Fable.Call _ | Fable.CurriedApply _ | Fable.Operation _
-        | Fable.Get _ | Fable.Test _ -> false
+        | Fable.Get _ | Fable.Test _ | Fable.Curry _ -> false
 
         | Fable.TypeCast(e,_) -> isJsStatement ctx preferStatement e
 
         | Fable.TryCatch _
         | Fable.Sequential _ | Fable.Let _ | Fable.LetRec _ | Fable.Set _
-        | Fable.ForLoop _ | Fable.WhileLoop _ -> true
-
-        | Fable.Extended(kind, _) ->
-            match kind with
-            | Fable.Throw _ | Fable.Return _ | Fable.Break _ | Fable.Debugger -> true
-            | Fable.Curry _ -> false
+        | Fable.ForLoop _ | Fable.WhileLoop _ | Fable.Throw _ -> true
 
         // TODO: If IsJsSatement is false, still try to infer it? See #2414
         // /^\s*(break|continue|debugger|while|for|switch|if|try|let|const|var)\b/
@@ -1609,27 +1604,20 @@ module Util =
             if info.IsStatement then iife com ctx expr
             else transformEmit com ctx range info
 
-        // These cannot appear in expression position in JS, must be wrapped in a lambda
-        | Fable.WhileLoop _ | Fable.ForLoop _ | Fable.TryCatch _ -> iife com ctx expr
+        | Fable.Curry(e, arity) -> transformCurry com ctx e arity
 
-        | Fable.Extended(instruction, _) ->
-            match instruction with
-            | Fable.Curry(e, arity) -> transformCurry com ctx e arity
-            | Fable.Throw _ | Fable.Return _ | Fable.Break _ | Fable.Debugger -> iife com ctx expr
+        // These cannot appear in expression position in JS, must be wrapped in a lambda
+        | Fable.WhileLoop _ | Fable.ForLoop _ | Fable.TryCatch _ | Fable.Throw _ -> iife com ctx expr
 
     let rec transformAsStatements (com: IBabelCompiler) ctx returnStrategy
                                     (expr: Fable.Expr): Statement array =
         match expr with
-        | Fable.Extended(kind, r) ->
-            match kind with
-            | Fable.Curry(e, arity) -> transformCurry com ctx e arity |> resolveExpr e.Type returnStrategy
-            | Fable.Throw(TransformExpr com ctx e, _) -> Statement.throwStatement(e, ?loc=r)
-            | Fable.Return(TransformExpr com ctx e) -> Statement.returnStatement(e, ?loc=r)
-            | Fable.Debugger -> Statement.debuggerStatement(?loc=r)
-            | Fable.Break label ->
-                let label = label |> Option.map Identifier.identifier
-                Statement.breakStatement(?label=label, ?loc=r)
-            |> Array.singleton
+        | Fable.Curry(e, arity) ->
+            [|transformCurry com ctx e arity |> resolveExpr e.Type returnStrategy|]
+
+        // TODO: Handle isRethrow
+        | Fable.Throw(TransformExpr com ctx e, _isRethrow, _, r) ->
+            [|Statement.throwStatement(e, ?loc=r)|]
 
         | Fable.TypeCast(e, t) ->
             [|transformCast com ctx t e |> resolveExpr t returnStrategy|]
@@ -1666,10 +1654,13 @@ module Util =
             transformCurriedApplyAsStatements com ctx range typ returnStrategy callee args
 
         | Fable.Emit(info, t, range) ->
-            let e = transformEmit com ctx range info
-            if info.IsStatement then
-                [|ExpressionStatement(e)|] // Ignore the return strategy
-            else [|resolveExpr t returnStrategy e|]
+            if info.Macro = "debugger" then
+                [|Statement.debuggerStatement(?loc=range)|]
+            else
+                let e = transformEmit com ctx range info
+                if info.IsStatement then
+                    [|ExpressionStatement(e)|] // Ignore the return strategy
+                else [|resolveExpr t returnStrategy e|]
 
         | Fable.Operation(kind, t, range) ->
             [|transformOperation com ctx range kind |> resolveExpr t returnStrategy|]

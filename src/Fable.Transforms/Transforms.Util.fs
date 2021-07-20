@@ -457,10 +457,10 @@ module AST =
         emitJs r t args true macro
 
     let makeThrow r t err =
-        Extended(Throw(err, t), r)
+        Throw(err, false, t, r)
 
     let makeDebugger range =
-        Extended(Debugger, range)
+        emitJs range Unit [] true "debugger"
 
     let destructureTupleArgs = function
         | [MaybeCasted(Value(UnitConstant,_))] -> []

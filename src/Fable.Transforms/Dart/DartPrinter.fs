@@ -3,6 +3,7 @@
 open System
 open Fable.AST
 open Fable.AST.Fable
+open Fable.AST.Statements
 
 type Writer =
     inherit IDisposable
@@ -93,9 +94,9 @@ module PrinterExtensions =
             if not skipNewLineAtEnd then
                 printer.PrintNewLine()
 
-        member printer.PrintBlock(nodes: Expr list, ?skipNewLineAtEnd) =
+        member printer.PrintBlock(nodes: Statement list, ?skipNewLineAtEnd) =
             printer.PrintBlock(List.toArray nodes,
-                               (fun p s -> p.Print(s)), // TODO: p.PrintProductiveStatement(s)),
+                               (fun p s -> p.PrintProductiveStatement(s)),
                                (fun p -> p.PrintStatementSeparator()),
                                ?skipNewLineAtEnd=skipNewLineAtEnd)
 
@@ -104,15 +105,15 @@ module PrinterExtensions =
                 printer.Print(";")
                 printer.PrintNewLine()
 
-        // TODO: Use Transforms.AST.canHaveSideEffects?
-        member this.HasSideEffects(e: Expr) =
+        // TODO
+        member this.HasSideEffects(e: Statement) =
             match e with
             | _ -> true
 
-        member this.IsProductiveStatement(s: Expr) =
+        member this.IsProductiveStatement(s: Statement) =
             this.HasSideEffects(s)
 
-        member printer.PrintProductiveStatement(s: Expr, ?printSeparator) =
+        member printer.PrintProductiveStatement(s: Statement, ?printSeparator) =
             if printer.IsProductiveStatement(s) then
                 printer.Print(s)
                 printSeparator |> Option.iter (fun f -> f printer)
@@ -131,11 +132,18 @@ module PrinterExtensions =
             | _ -> printer.AddError("TODO: Print type")
 
         // TODO
-        member printer.ComplexExpressionWithParens(expr: Expr) =
+        member printer.ComplexExpressionWithParens(expr: Expression) =
             printer.Print(expr)
 
         member printer.PrintOperation(kind) =
             match kind with
+            | Ternary(condition, thenExpr, elseExpr) ->
+                printer.ComplexExpressionWithParens(condition)
+                printer.Print(" ? ")
+                printer.ComplexExpressionWithParens(thenExpr)
+                printer.Print(" : ")
+                printer.ComplexExpressionWithParens(elseExpr)
+
             | Binary(operator, left, right) ->
                 printer.ComplexExpressionWithParens(left)
                 // TODO: review
@@ -177,14 +185,16 @@ module PrinterExtensions =
                 | UnaryTypeof | UnaryVoid | UnaryDelete -> printer.AddError($"Operator not supported {operator}")
                 printer.ComplexExpressionWithParens(operand)
 
+        member printer.PrintStringLiteral(value: string) =
+            printer.Print("\"")
+            printer.Print(printer.EscapeStringLiteral(value))
+            printer.Print("\"")
+
         member printer.PrintValue(kind: ValueKind) =
             match kind with
-            | BoolConstant v -> printer.Print((if v then "true" else "false"))
-            | StringConstant value ->
-                printer.Print("\"")
-                printer.Print(printer.EscapeStringLiteral(value))
-                printer.Print("\"")
-//            | CharConstant of value: char
+            | BoolConstant v -> printer.Print(if v then "true" else "false")
+            | StringConstant value -> printer.PrintStringLiteral(value)
+            | CharConstant value -> printer.PrintStringLiteral(string value)
             | NumberConstant(value,_,_) ->
                 let value =
                     match value.ToString(System.Globalization.CultureInfo.InvariantCulture) with
@@ -194,32 +204,37 @@ module PrinterExtensions =
                 printer.Print(value)
             | ThisValue _ -> printer.Print("this")
             | Null _ | UnitConstant -> printer.Print("null")
-//            | NewArray of values: Expr list * typ: Type
-//            | NewArrayFrom of value: Expr * typ: Type
-//            | BaseValue of boundIdent: Ident option * typ: Type
-//            | TypeInfo of typ: Type
-//            | RegexConstant of source: string * flags: RegexFlag list
-//            | EnumConstant of value: Expr * ref: EntityRef
-//            | NewOption of value: Expr option * typ: Type * isStruct: bool
-//            | NewList of headAndTail: (Expr * Expr) option * typ: Type
-//            | NewTuple of values: Expr list * isStruct: bool
-//            | NewRecord of values: Expr list * ref: EntityRef * genArgs: Type list
-//            | NewAnonymousRecord of values: Expr list * fieldNames: string [] * genArgs: Type list
-//            | NewUnion of values: Expr list * tag: int * ref: EntityRef * genArgs: Type list
-            | _ -> printer.AddError("TODO: Print value")
 
-        member printer.Print(expr: Expr) =
+        member printer.Print(expr: Expression) =
             match expr with
             | IdentExpr i -> printer.Print(i.Name)
             | Value(kind,_) -> printer.PrintValue(kind)
             | Operation(kind,_,_) -> printer.PrintOperation(kind)
-            | Extended(kind,_) ->
+            | Throw(e,_) ->
+                printer.Print("throw ")
+                printer.Print(e)
+
+        member printer.Print(statement: Statement) =
+            match statement with
+            | ExpressionStatement e -> printer.Print(e)
+            | Return e ->
+                printer.Print("return ")
+                printer.Print(e)
+            | Break None ->
+                printer.Print("break")
+            | Break(Some label) ->
+                printer.Print("break " + label)
+            | Set(expr, kind, _typ, value, _) ->
+                printer.Print(expr)
                 match kind with
-                | Return e ->
-                    printer.Print("return ")
-                    printer.Print(e)
-                | _ -> printer.AddError("TODO: Print extended set")
-            | _ -> printer.AddError("TODO: Print expression")
+                | ExprSet field ->
+                    printer.Print("[")
+                    printer.Print(field)
+                    printer.Print("]")
+                | FieldSet field -> printer.Print("." + field)
+                | ValueSet -> ()
+                printer.Print(" = ")
+                printer.Print(value)
 
         member printer.PrintArray(items: 'a array, printItem: Printer -> 'a -> unit, printSeparator: Printer -> unit) =
             for i = 0 to items.Length - 1 do
@@ -234,26 +249,23 @@ module PrinterExtensions =
                 p.Print(x.Name)
             ), (fun p -> p.Print(", ")))
 
-        member printer.PrintFunctionDeclaration(name: string, args: Ident list, body: Expr) =
-            printer.Print(body.Type)
+        member printer.PrintFunctionDeclaration(name: string, args: Ident list, body: Statement list, typ: Type) =
+            printer.Print(typ)
             printer.Print(" ")
             printer.Print(name)
             printer.Print("(")
             printer.PrintCommaSeparatedArray(List.toArray args)
             printer.Print(") ")
 
-            printer.PrintBlock([body], skipNewLineAtEnd=true)
+            printer.PrintBlock(body, skipNewLineAtEnd=true)
 
         member printer.Print(md: Declaration) =
             match md with
-            | ModuleDeclaration _ -> printer.AddError("Nested modules are not supported")
-            | ActionDeclaration _ -> printer.AddError("TODO: Action declaration")
-            | ClassDeclaration _ -> printer.AddError("TODO: Class declaration")
-            | MemberDeclaration m -> printer.PrintFunctionDeclaration(m.Name, m.Args, m.Body)
+            | MemberDeclaration m -> printer.PrintFunctionDeclaration(m.Name, m.Args, m.Body, m.Type)
 
 open PrinterExtensions
 
-let run (writer: Writer) (file: File): Async<unit> =
+let run (writer: Writer) (declarations: Declaration list): Async<unit> =
     let printDeclWithExtraLine extraLine (printer: Printer) (decl: Declaration) =
         printer.Print(decl)
 
@@ -267,7 +279,7 @@ let run (writer: Writer) (file: File): Async<unit> =
         use printer = new PrinterImpl(writer)
 
         // TODO: Imports
-        for decl in file.Declarations do
+        for decl in declarations do
             printDeclWithExtraLine true printer decl
             do! printer.Flush()
     }

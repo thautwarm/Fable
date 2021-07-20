@@ -534,17 +534,13 @@ module Util =
         | Fable.Value _ | Fable.Import _  | Fable.IdentExpr _
         | Fable.Lambda _ | Fable.Delegate _ | Fable.ObjectExpr _
         | Fable.Call _ | Fable.CurriedApply _ | Fable.Operation _
-        | Fable.Get _ | Fable.Test _ | Fable.TypeCast _ -> false
+        | Fable.Get _ | Fable.Test _ | Fable.TypeCast _ | Fable.Curry _ -> false
 
         | Fable.TryCatch _
         | Fable.Sequential _ | Fable.Let _ | Fable.LetRec _ | Fable.Set _
-        | Fable.ForLoop _ | Fable.WhileLoop _ -> true
-        | Fable.Extended(kind, _) ->
-            match kind with
-            | Fable.Throw _ | Fable.Return _ | Fable.Break _ | Fable.Debugger -> true
-            | Fable.Curry _ -> false
+        | Fable.ForLoop _ | Fable.WhileLoop _ | Fable.Throw _ -> true
 
-        // TODO: If IsJsSatement is false, still try to infer it? See #2414
+        // TODO: If IsStatement is false, still try to infer it? See #2414
         // /^\s*(break|continue|debugger|while|for|switch|if|try|let|const|var)\b/
         | Fable.Emit(i,_,_) -> i.IsStatement
 
@@ -1796,26 +1792,21 @@ module Util =
             if info.IsStatement then iife com ctx expr
             else transformEmit com ctx range info
 
+        | Fable.Curry(e, arity) -> transformCurry com ctx e arity
+
         // These cannot appear in expression position in JS, must be wrapped in a lambda
-        | Fable.WhileLoop _ | Fable.ForLoop _ | Fable.TryCatch _ ->
+        | Fable.WhileLoop _ | Fable.ForLoop _ | Fable.TryCatch _ | Fable.Throw _ ->
             iife com ctx expr
-        | Fable.Extended(instruction, _) ->
-            match instruction with
-            | Fable.Curry(e, arity) -> transformCurry com ctx e arity
-            | Fable.Throw _ | Fable.Return _ | Fable.Break _ | Fable.Debugger -> iife com ctx expr
 
     let rec transformAsStatements (com: IPythonCompiler) ctx returnStrategy
                                     (expr: Fable.Expr): Statement list =
         match expr with
-        | Fable.Extended(kind, r) ->
-            match kind with
-            | Fable.Curry(e, arity) ->
-                let expr, stmts = transformCurry com ctx e arity
-                stmts @ (expr |> resolveExpr ctx e.Type returnStrategy)
-            | Fable.Throw(TransformExpr com ctx (e, stmts), _) -> stmts @ [Statement.raise(e) ]
-            | Fable.Return(TransformExpr com ctx (e, stmts)) -> stmts @ [ Statement.return'(e)]
-            | Fable.Debugger -> []
-            | Fable.Break label -> [ Statement.break'() ]
+        | Fable.Curry(e, arity) ->
+            let expr, stmts = transformCurry com ctx e arity
+            stmts @ (expr |> resolveExpr ctx e.Type returnStrategy)
+
+        // TODO: Handle isRethrow
+        | Fable.Throw(TransformExpr com ctx (e, stmts), _isRethrow, _, _) -> stmts @ [Statement.raise(e) ]
 
         | Fable.TypeCast(e, t) ->
             let expr, stmts = transformCast com ctx t e

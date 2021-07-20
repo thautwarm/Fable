@@ -4,7 +4,6 @@ open System
 open Fable
 open Fable.AST
 open Fable.Transforms
-open Fable.Transforms.State
 
 module Js =
     type BabelWriter(cliArgs: CliArgs, dedupTargetDir, sourcePath: string, targetPath: string) =
@@ -135,7 +134,7 @@ module Dart =
         let _imports, fable =
             FSharp2Fable.Compiler.transformFile com
             |> FableTransforms.transformFile com
-            |> Fable2Extended.Compiler.transformFile com
+            |> Fable2Statements.Compiler.transformFile com
 
         use writer = new DartWriter(com, cliArgs, dedupTargetDir, outPath)
         do! DartPrinter.run writer fable

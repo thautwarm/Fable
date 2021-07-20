@@ -1,14 +1,16 @@
-module rec Fable.Transforms.Fable2Extended
+module rec Fable.Transforms.Fable2Statements
 
 open Fable
 open Fable.AST
+open Fable.AST.Statements
 open System.Collections.Generic
 open Fable.Transforms.AST
+open Fable.Transforms.FSharp2Fable
 
 type ReturnStrategy =
-    | Return
+    | ReturnExpr
     | ReturnUnit
-    | Assign of Fable.Expr
+    | Assign of Expression
     | Target of Fable.Ident
 
 type Import =
@@ -38,11 +40,11 @@ type Context =
 type IExtendedCompiler =
     inherit Compiler
     abstract GetAllImports: unit -> Import list
-    abstract GetImportExpr: Context * selector: string * path: string * SourceLocation option -> Fable.Expr
-    abstract TransformAsExpr: Context * Fable.Expr -> Fable.Expr
-    abstract TransformAsStatements: Context * ReturnStrategy option * Fable.Expr -> Fable.Expr array
-    abstract TransformImport: Context * selector:string * path:string -> Fable.Expr
-    abstract TransformFunction: Context * string option * Fable.Ident list * Fable.Expr -> (Fable.Ident array) * Fable.Expr
+    abstract GetImportExpr: Context * selector: string * path: string * SourceLocation option -> Expression
+    abstract TransformAsExpr: Context * Fable.Expr -> Expression
+    abstract TransformAsStatements: Context * ReturnStrategy option * Fable.Expr -> Statement list
+    abstract TransformImport: Context * selector:string * path:string -> Expression
+    abstract TransformFunction: Context * string option * Fable.Ident list * Fable.Expr -> Fable.Ident list * Choice<Expression, Statement list>
     abstract WarnOnlyOnce: string * ?range: SourceLocation -> unit
 
 module Util =
@@ -101,7 +103,7 @@ module Util =
         | Fable.Value _ | Fable.Import _  | Fable.IdentExpr _
         | Fable.Lambda _ | Fable.Delegate _ | Fable.ObjectExpr _
         | Fable.Call _ | Fable.CurriedApply _ | Fable.Operation _
-        | Fable.Get _ | Fable.Test _ -> false
+        | Fable.Get _ | Fable.Test _ | Fable.Curry _ -> false
 
         | Fable.TypeCast(e,_) -> isStatement ctx preferStatement e
 
@@ -111,11 +113,8 @@ module Util =
         | Fable.Sequential _ | Fable.Let _ | Fable.LetRec _
         | Fable.ForLoop _ | Fable.WhileLoop _ -> true
 
-        | Fable.Extended(kind, _) ->
-            match kind with
-            | Fable.Throw _ // TODO: Depends on language target
-            | Fable.Break _ | Fable.Debugger | Fable.Return _ -> true
-            | Fable.Curry _ -> false
+        // TODO: Depending on the target language throw can be expression or statement
+        | Fable.Throw _ -> false
 
         // TODO: If IsSatement is false, still try to infer it? See #2414
         // /^\s*(break|continue|debugger|while|for|switch|if|try|let|const|var)\b/
@@ -171,21 +170,18 @@ module Util =
 //        com.GetImportExpr(ctx, selector, path, r)
 //        |> getParts parts
 
-    let transformValue (com: IExtendedCompiler) (ctx: Context) r value: Fable.ValueKind =
+    let transformValue (com: IExtendedCompiler) (ctx: Context) r value: ValueKind =
         match value with
-        | Fable.TypeInfo t -> value // TODO: transformTypeInfo com ctx r Map.empty t
-        | Fable.BaseValue _
-        | Fable.ThisValue _
+        | Fable.ThisValue t -> ThisValue t
+//        | Fable.BaseValue _
         | Fable.Null _
-        | Fable.UnitConstant
-        | Fable.BoolConstant _
-        | Fable.CharConstant _
-        | Fable.StringConstant _
-        | Fable.NumberConstant _
-        | Fable.RegexConstant _ -> value
-        // TODO: Transform to array depending on language?
-        | Fable.NewTuple _ -> value
-        | _ -> value // TODO
+        | Fable.UnitConstant -> UnitConstant
+        | Fable.BoolConstant v -> BoolConstant v
+        | Fable.CharConstant v -> CharConstant v
+        | Fable.StringConstant v -> StringConstant v
+        | Fable.NumberConstant(v, k, uom) -> NumberConstant(v, k, uom)
+//        | Fable.RegexConstant v -> value
+        | _ -> Null Fable.Any // TODO
 
 //    let transformCallArgs (com: IExtendedCompiler) ctx hasSpread args =
 //        match args with
@@ -202,12 +198,12 @@ module Util =
 //                rest @ [Expression.spreadElement(com.TransformAsExpr(ctx, last))]
 //        | args -> List.map (fun e -> com.TransformAsExpr(ctx, e)) args
 
-    let resolveExpr t strategy expr: Fable.Expr =
+    let resolveExpr t strategy expr: Statement =
         match strategy with
-        | None | Some ReturnUnit -> expr
-        | Some Return -> Fable.Extended(Fable.Return expr, expr.Range)
-        | Some(Assign left) -> Fable.Set(left, Fable.ValueSet, left.Type, expr, None)
-        | Some(Target left) -> Fable.Set(Fable.IdentExpr left, Fable.ValueSet, left.Type, expr, None)
+        | None | Some ReturnUnit -> ExpressionStatement expr
+        | Some ReturnExpr -> Return expr
+        | Some(Assign left) -> Set(left, ValueSet, left.Type, expr, None)
+        | Some(Target left) -> Set(IdentExpr left, ValueSet, left.Type, expr, None)
 
 //    let transformCall (com: IExtendedCompiler) ctx range callee (callInfo: Fable.CallInfo) =
 //        let callee = com.TransformAsExpr(ctx, callee)
@@ -388,31 +384,35 @@ module Util =
 //                let cases = cases |> List.map (fun (caseExpr, targetIndex, boundValues) ->
 
     let rec transformDeclaration (com: IExtendedCompiler) ctx decl =
-        let withCurrentScope ctx (usedNames: Set<string>) f =
+        let withCurrentScope (ctx: Context) (usedNames: Set<string>) f =
             let ctx = { ctx with UsedNames = { ctx.UsedNames with CurrentDeclarationScope = HashSet usedNames } }
             let result = f ctx
             ctx.UsedNames.DeclarationScopes.UnionWith(ctx.UsedNames.CurrentDeclarationScope)
             result
 
         match decl with
-        | Fable.ModuleDeclaration decl ->
-            decl.Members |> List.collect (transformDeclaration com ctx)
 
         | Fable.MemberDeclaration memb ->
             withCurrentScope ctx memb.UsedNames <| fun ctx ->
-                if memb.Info.IsValue then
-                    [decl] // TODO
-                else
-                    // TODO HACK: For now we just put Return in front of the expression
-                    { memb with Body = Fable.Extended(Fable.Return memb.Body, memb.Body.Range) }
-                    |> Fable.MemberDeclaration
-                    |> List.singleton
+//                if memb.Info.IsValue then // TODO
+                {
+                    Name = memb.Name
+                    FullDisplayName = memb.FullDisplayName
+                    Args = memb.Args
+                    Body = [] // [Return memb.Body] // TODO HACK: For now we just put Return in front of the expression
+                    Type = memb.Body.Type
+                    Info = memb.Info
+                    UsedNames = memb.UsedNames
+                }
+                |> MemberDeclaration
+                |> List.singleton
+
+        | Fable.ModuleDeclaration decl ->
+            decl.Members |> List.collect (transformDeclaration com ctx)
 
         // TODO
         | Fable.ActionDeclaration _
-//            withCurrentScope ctx decl.UsedNames <| fun ctx ->
-//                transformAction com ctx decl.Body
-        | Fable.ClassDeclaration _ -> [decl]
+        | Fable.ClassDeclaration _ -> []
 
     let getIdentForImport (ctx: Context) (path: string) (selector: string) =
         if System.String.IsNullOrEmpty selector then None
@@ -441,8 +441,8 @@ module Compiler =
                 match imports.TryGetValue(cachedName) with
                 | true, i ->
                     match i.LocalIdent with
-                    | Some localIdent -> makeIdentExpr localIdent
-                    | None -> makeNull()
+                    | Some localIdent -> makeIdent localIdent |> IdentExpr
+                    | None -> Value(Null Fable.Any, None)
                 | false, _ ->
                     let localId = getIdentForImport ctx path selector
                     let i =
@@ -455,8 +455,8 @@ module Compiler =
                         LocalIdent = localId }
                     imports.Add(cachedName, i)
                     match localId with
-                    | Some localId -> makeIdentExpr localId // TODO: type
-                    | None -> makeNull()
+                    | Some localId -> makeIdent localId |> IdentExpr // TODO: type
+                    | None -> Value(Null Fable.Any, None)
             member _.GetAllImports() = imports.Values |> Seq.toList
             member bcom.TransformAsExpr(ctx, e) = failwith "todo" //transformAsExpr bcom ctx e
             member bcom.TransformAsStatements(ctx, ret, e) = failwith "todo" //transformAsStatements bcom ctx ret e
@@ -499,4 +499,4 @@ module Compiler =
             OptimizeTailCall = fun () -> ()
             ScopedTypeParams = Set.empty }
         let rootDecls = List.collect (transformDeclaration com ctx) file.Declarations
-        com.GetAllImports(), Fable.File(rootDecls)
+        com.GetAllImports(), rootDecls

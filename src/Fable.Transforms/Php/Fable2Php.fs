@@ -514,7 +514,8 @@ let rec tryFindMethod methodName (phpType: PhpType) =
 /// convert a Fable expression to a Php expression
 let rec convertExpr (com: IPhpCompiler) (expr: Fable.Expr) =
     match expr with
-    | Fable.Extended _ -> failwith "TODO: Extended instructions"
+    | Fable.Curry(expr, arrity) ->
+        failwith "Curry is not implemented"
 
     | Fable.Value(value,range) ->
         // this is a value (number / record instanciation ...)
@@ -652,9 +653,13 @@ let rec convertExpr (com: IPhpCompiler) (expr: Fable.Expr) =
         PhpFunctionCall(convertExpr com expr, [for arg in args -> convertExpr com arg])
 
     | Fable.Emit(info,_,_) ->
-        // convert to Php macro preparing replacements
-        // see in the Printer to see how it's handled
-        PhpMacro(info.Macro, [for arg in info.CallInfo.Args -> convertExpr com arg])
+        // TODO debugger
+//        if info.Macro = "debugger" then
+//            [PhpDo (PhpFunctionCall(PhpIdent (unscopedIdent "assert"), [ PhpConst (PhpConstBool false)]))]
+//        else
+            // convert to Php macro preparing replacements
+            // see in the Printer to see how it's handled
+            PhpMacro(info.Macro, [for arg in info.CallInfo.Args -> convertExpr com arg])
     | Fable.Get(expr, kind ,tex,_) ->
         // this is a value access
         let phpExpr = convertExpr com expr
@@ -915,7 +920,8 @@ let rec convertExpr (com: IPhpCompiler) (expr: Fable.Expr) =
     | Fable.ForLoop _
     | Fable.WhileLoop _
     | Fable.Set _
-    | Fable.TryCatch _ ->
+    | Fable.TryCatch _
+    | Fable.Throw _ ->
         // these constructs should always be embeded in a function
         // and converted using the convertExprToStatement
         failwith "Should not appear in expression"
@@ -1242,17 +1248,10 @@ and convertExprToStatement (com: IPhpCompiler) expr returnStrategy =
 
         [ PhpFor(id,startExpr, limitExpr, isUp, bodyExpr)]
 
-    | Fable.Extended(Fable.Break label,_) ->
-        let phpLevel =
-            match label with
-            | Some lbl -> com.FindLableLevel lbl |> Some
-            | None -> None
-        [ PhpBreak phpLevel ]
-    | Fable.Extended(Fable.Debugger, _) ->
-        [ PhpDo (PhpFunctionCall(PhpIdent (unscopedIdent "assert"), [ PhpConst (PhpConstBool false)])) ]
-    | Fable.Extended(Fable.Throw(expr, _ ),_) ->
+    // TODO: Handle isRethrow
+    | Fable.Throw(expr, _isRethrow, _, _) ->
             [ PhpThrow(convertExpr com expr)]
-    | Fable.Extended(Fable.Curry(expr, arrity),_) ->
+    | Fable.Curry(expr, arrity) ->
         failwith "Curry is not implemented"
 
     | _ ->

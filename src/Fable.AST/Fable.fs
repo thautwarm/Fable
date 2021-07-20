@@ -170,7 +170,7 @@ and Declaration =
     | ClassDeclaration of ClassDecl
     member this.UsedNames =
         match this with
-        | ModuleDeclaration d -> Set.empty
+        | ModuleDeclaration _ -> Set.empty
         | ActionDeclaration d -> d.UsedNames
         | MemberDeclaration d -> d.UsedNames
         | ClassDeclaration d ->
@@ -335,27 +335,7 @@ type TestKind =
     | ListTest of isCons: bool
     | UnionCaseTest of tag: int
 
-type ExtendedSet =
-    | Return of expr: Expr
-    | Break of label: string option
-    | Throw of expr: Expr * typ: Type
-    | Debugger
-    | Curry of expr: Expr * arity: int
-    member this.Type =
-        match this with
-        | Return e -> e.Type
-        | Throw(_,t) -> t
-        | Break _ -> Unit
-        | Debugger -> Unit
-        /// Used in the uncurrying transformations, we'll try to remove the curried expressions
-        /// with beta reduction but in some cases it may be necessary to do it at runtime
-        | Curry (expr, _) -> expr.Type
-
 type Expr =
-    /// The extended set contains instructions that are not used in the first FSharp2Fable pass
-    /// but later when making the AST closer to a C-like language
-    | Extended of instruction: ExtendedSet * range: SourceLocation option
-
     /// Identifiers that reference another expression
     | IdentExpr of ident: Ident
 
@@ -381,6 +361,11 @@ type Expr =
     /// Operations that can be defined with native operators
     | Operation of kind: OperationKind * typ: Type * range: SourceLocation option
 
+    | Throw of expr: Expr * isRethrow: bool * typ: Type * range: SourceLocation option
+    /// Used in the uncurrying transformations, we'll try to remove the curried expressions
+    /// with beta reduction but in some cases it may be necessary to do it at runtime
+    | Curry of expr: Expr * arity: int
+
     // Imports and code emissions
     | Import of info: ImportInfo * typ: Type * range: SourceLocation option
     | Emit of info: EmitInfo * typ: Type * range: SourceLocation option
@@ -392,8 +377,8 @@ type Expr =
     // Getters, setters and bindings
     | Let of ident: Ident * value: Expr * body: Expr
     | LetRec of bindings: (Ident * Expr) list * body: Expr
-    | Get of Expr * kind: GetKind * typ: Type * range: SourceLocation option
-    | Set of Expr * kind: SetKind * typ: Type * value: Expr * range: SourceLocation option
+    | Get of expr: Expr * kind: GetKind * typ: Type * range: SourceLocation option
+    | Set of expr: Expr * kind: SetKind * typ: Type * value: Expr * range: SourceLocation option
 
     // Control flow
     | Sequential of exprs: Expr list
@@ -407,7 +392,8 @@ type Expr =
         | Test _ -> Boolean
         | Value (kind, _) -> kind.Type
         | IdentExpr id -> id.Type
-        | Extended (kind, _) -> kind.Type
+        | Throw(_,_,t,_) -> t
+        | Curry (expr, _) -> expr.Type
         | Call(_,_,t,_)
         | CurriedApply(_,_,t,_)
         | TypeCast (_, t)
@@ -441,7 +427,8 @@ type Expr =
         | Delegate (_, e, _)
         | TypeCast (e, _) -> e.Range
         | IdentExpr id -> id.Range
-        | Extended(_,r)
+        | Curry (e, _) -> e.Range
+        | Throw(_,_,_,r)
         | Call(_,_,_,r)
         | CurriedApply(_,_,_,r)
         | Emit (_,_,r)

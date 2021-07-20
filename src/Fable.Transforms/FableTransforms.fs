@@ -10,13 +10,8 @@ let visit f e =
     | Import(info, t, r) ->
         Import({ info with Selector = info.Selector
                            Path = info.Path }, t, r)
-    | Extended(kind, r) ->
-        match kind with
-        | Curry(e, arity) -> Extended(Curry(f e, arity), r)
-        | Throw(e, t) -> Extended(Throw(f e, t), r)
-        | Return e -> Extended(Return(f e), r)
-        | Break _
-        | Debugger -> e
+    | Curry(e, arity) -> Curry(f e, arity)
+    | Throw(e, b, t, r) -> Throw(f e, b, t, r)
     | Value(kind, r) ->
         match kind with
         | ThisValue _ | BaseValue _
@@ -103,13 +98,8 @@ let getSubExpressions = function
     | IdentExpr _ -> []
     | TypeCast(e,_) -> [e]
     | Import _ -> []
-    | Extended(kind, _) ->
-        match kind with
-        | Return e
-        | Curry(e, _)
-        | Throw(e, _) -> [e]
-        | Break _
-        | Debugger -> []
+    | Curry(e, _)
+    | Throw(e, _, _, _) -> [e]
     | Value(kind,_) ->
         match kind with
         | ThisValue _ | BaseValue _
@@ -242,8 +232,8 @@ let noSideEffectBeforeIdent identName expr =
                 true
             else false
         | Import _ | Lambda _ | Delegate _ -> false
-        | Extended((Return _|Throw _|Break _|Debugger),_) -> true
-        | Extended(Curry(e,_),_) -> findIdentOrSideEffect e
+        | Throw _ -> true
+        | Curry(e,_) -> findIdentOrSideEffect e
         | CurriedApply(callee, args, _, _) ->
             callee::args |> findIdentOrSideEffectInList |> orSideEffect
         | Call(e1, info, _, _) ->
@@ -390,7 +380,7 @@ module private Transforms =
         visitFromInsideOut (function
             | IdentExpr id as e ->
                 match Map.tryFind id.Name replacements with
-                | Some arity -> Extended(Curry(e, arity), e.Range)
+                | Some arity -> Curry(e, arity)
                 | None -> e
             | e -> e) body
 
@@ -414,11 +404,11 @@ module private Transforms =
             | None -> true
         match expr, expr with
         | MaybeCasted(LambdaUncurriedAtCompileTime arity lambda), _ -> lambda
-        | _, Extended(Curry(innerExpr, arity2),_)
+        | _, Curry(innerExpr, arity2)
             when matches arity arity2 -> innerExpr
-        | _, Get(Extended(Curry(innerExpr, arity2),_), OptionValue, t, r)
+        | _, Get(Curry(innerExpr, arity2), OptionValue, t, r)
             when matches arity arity2 -> Get(innerExpr, OptionValue, t, r)
-        | _, Value(NewOption(Some(Extended(Curry(innerExpr, arity2),_)), t, isStruct), r)
+        | _, Value(NewOption(Some(Curry(innerExpr, arity2)), t, isStruct), r)
             when matches arity arity2 -> Value(NewOption(Some(innerExpr), t, isStruct), r)
         | _ ->
             match arity with
@@ -503,11 +493,11 @@ module private Transforms =
         | Let(ident, value, body) when not ident.IsMutable ->
             let ident, value, arity =
                 match value with
-                | Extended(Curry(innerExpr, arity),_) ->
+                | Curry(innerExpr, arity) ->
                     ident, innerExpr, Some arity
-                | Get(Extended(Curry(innerExpr, arity),_), OptionValue, t, r) ->
+                | Get(Curry(innerExpr, arity), OptionValue, t, r) ->
                     ident, Get(innerExpr, OptionValue, t, r), Some arity
-                | Value(NewOption(Some(Extended(Curry(innerExpr, arity),_)), t, isStruct), r) ->
+                | Value(NewOption(Some(Curry(innerExpr, arity)), t, isStruct), r) ->
                     ident, Value(NewOption(Some(innerExpr), t, isStruct), r), Some arity
                 | _ -> ident, value, None
             match arity with
@@ -543,9 +533,9 @@ module private Transforms =
                 let callee = makeImportLib com Any "checkArity" "Util"
                 let info = makeCallInfo None [makeIntConst arity; e] []
                 let e = Call(callee, info, t, r)
-                if arity > 1 then Extended(Curry(e, arity), e.Range)
+                if arity > 1 then Curry(e, arity)
                 else e
-            | (arity, _), _ when arity > 1 -> Extended(Curry(e, arity), e.Range)
+            | (arity, _), _ when arity > 1 -> Curry(e, arity)
             | _ -> e
         | ObjectExpr(members, t, baseCall) ->
             ObjectExpr(List.map uncurryMemberArgs members, t, baseCall)
@@ -602,9 +592,9 @@ module private Transforms =
             let applied = visitFromOutsideIn (uncurryApplications com) applied
             let args = args |> List.map (visitFromOutsideIn (uncurryApplications com))
             match applied with
-            | Extended(Curry(applied, uncurriedArity),_) ->
+            | Curry(applied, uncurriedArity) ->
                 uncurryApply r t applied args uncurriedArity
-            | Get(Extended(Curry(applied, uncurriedArity),_), OptionValue, t2, r2) ->
+            | Get(Curry(applied, uncurriedArity), OptionValue, t2, r2) ->
                 uncurryApply r t (Get(applied, OptionValue, t2, r2)) args uncurriedArity
             | _ -> CurriedApply(applied, args, t, r) |> Some
         | _ -> None
