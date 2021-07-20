@@ -37,7 +37,7 @@ type BoundVars =
       LocalScope: HashSet<string> }
 
     member this.EnterScope () =
-        // printfn "EnterScope"
+        // printfn "EnterScope: %A" this
         let enclosingScope = HashSet<string>()
         enclosingScope.UnionWith(this.EnclosingScope)
         enclosingScope.UnionWith(this.LocalScope)
@@ -62,6 +62,7 @@ type BoundVars =
                 else
                     this.Bind(name)
         ]
+
 type Context =
   { File: Fable.File
     UsedNames: UsedNames
@@ -790,9 +791,11 @@ module Util =
         FunctionDef.Create(name = name, args = args, body = body)
 
     let makeFunctionExpression (com: IPythonCompiler) ctx name (args, (body: Expression)) : Expression * Statement list=
+        let ctx = { ctx with BoundVars = ctx.BoundVars.EnterScope() }
+
         let name =
             name |> Option.map (fun name -> com.GetIdentifier(ctx, name))
-            |> Option.defaultValue (Helpers.getUniqueIdentifier "lifted")
+            |> Option.defaultValue (Helpers.getUniqueIdentifier "expr")
         let func = makeFunction name (args, body)
         Expression.name(name), [ func ]
 
@@ -1468,6 +1471,7 @@ module Util =
             com.TransformAsExpr(ctx, target)
 
     let exprAsStatement (ctx: Context) (expr: Expression) : Statement list =
+        // printfn "exprAsStatement: %A" expr
         match expr with
         | NamedExpr({Target=target; Value=value; Loc=loc }) ->
             let nonLocals =
@@ -1477,7 +1481,7 @@ module Util =
                     [ ctx.BoundVars.NonLocals([ id ]) |> Statement.nonLocal ]
                 | _ -> []
 
-            //printfn "Nonlocals: %A" nonLocals
+            // printfn "Nonlocals: %A" nonLocals
             nonLocals @ [ Statement.assign([target], value) ]
         | _ -> [ Statement.expr(expr) ]
 
@@ -1654,7 +1658,7 @@ module Util =
                 transformDecisionTreeWithTwoSwitches com ctx returnStrategy targets treeExpr
 
     let transformSequenceExpr (com: IPythonCompiler) ctx (exprs: Fable.Expr list) : Expression * Statement list =
-        //printfn "transformSequenceExpr"
+        // printfn "transformSequenceExpr1"
         let ctx = { ctx with BoundVars = ctx.BoundVars.EnterScope() }
         let body =
             exprs
@@ -1675,14 +1679,15 @@ module Util =
         // expr, []
         //printfn "transformSequenceExpr, body: %A" body
 
-        let name = Helpers.getUniqueIdentifier ("lifted")
+        let name = Helpers.getUniqueIdentifier ("expr")
         let func = FunctionDef.Create(name = name, args = Arguments.arguments [], body = body)
 
         let name = Expression.name (name)
         Expression.call (name), [ func ]
 
     let transformSequenceExpr' (com: IPythonCompiler) ctx (exprs: Expression list) (stmts: Statement list) : Expression * Statement list =
-        //printfn "transformSequenceExpr', exprs: %A" exprs.Length
+        // printfn "transformSequenceExpr2', exprs: %A" exprs.Length
+        // printfn "ctx: %A" ctx.BoundVars
         let ctx = { ctx with BoundVars = ctx.BoundVars.EnterScope() }
 
         let body =
@@ -1695,7 +1700,7 @@ module Util =
                     else
                         exprAsStatement ctx expr)
 
-        let name = Helpers.getUniqueIdentifier ("lifted")
+        let name = Helpers.getUniqueIdentifier ("expr")
         let func = FunctionDef.Create(name = name, args = Arguments.arguments [], body = body)
 
         let name = Expression.name (name)
@@ -1770,6 +1775,7 @@ module Util =
 
         | Fable.Set(expr, kind, typ, value, range) ->
             let expr', stmts = transformSet com ctx range expr typ value kind
+            //printfn "Fable.Set: %A" expr
             match expr' with
             | Expression.NamedExpr({ Target = target; Value = _; Loc=_ }) ->
                 let nonLocals =
@@ -1780,13 +1786,8 @@ module Util =
             | _ -> expr', stmts
 
         | Fable.Let(ident, value, body) ->
-            //printfn "Fable.Let: %A" (ident, value, body)
-            if ctx.HoistVars [ident] then
-                let assignment, stmts = transformBindingAsExpr com ctx ident value
-                let bodyExpr, stmts' = com.TransformAsExpr(ctx, body)
-                let expr, stmts'' = transformSequenceExpr' com ctx [ assignment; bodyExpr ] (stmts @ stmts')
-                expr, stmts''
-            else iife com ctx expr
+            // printfn "Fable.Let: %A" (ident, value, body)
+            iife com ctx expr
 
         | Fable.LetRec(bindings, body) ->
             if ctx.HoistVars(List.map fst bindings) then
@@ -1885,6 +1886,7 @@ module Util =
 
         | Fable.Set(expr, kind, typ, value, range) ->
             let expr', stmts = transformSet com ctx range expr typ value kind
+            // printfn "Fable.Set: %A" (expr', value)
             match expr' with
             | Expression.NamedExpr({ Target = target; Value = value; Loc=loc }) ->
                 let nonLocals =
@@ -1988,11 +1990,11 @@ module Util =
                 args', Statement.while'(Expression.constant(true), body)
                 |> List.singleton
             | _ -> args |> List.map (ident com ctx), body
-        let body =
-            if declaredVars.Count = 0 then body
-            else
-                let varDeclStatement = multiVarDeclaration ctx [for v in declaredVars -> ident com ctx v, None]
-                varDeclStatement @ body
+        // let body =
+        //     if declaredVars.Count = 0 then body
+        //     else
+        //         let varDeclStatement = multiVarDeclaration ctx [for v in declaredVars -> ident com ctx v, None]
+        //         varDeclStatement @ body
         //printfn "Args: %A" (args, body)
         let args = Arguments.arguments(args |> List.map Arg.arg)
         args, body
@@ -2106,7 +2108,7 @@ module Util =
             getMemberArgsAndBody com ctx (NonAttached membName) info.HasSpread args body
 
         //printfn "Arsg: %A" args
-        let name = com.GetIdentifier(ctx, membName) //Helpers.getUniqueIdentifier "lifted"
+        let name = com.GetIdentifier(ctx, membName)
         let stmt = FunctionDef.Create(name = name, args = args, body = body)
         let expr = Expression.name (name)
         info.Attributes
@@ -2429,7 +2431,7 @@ module Compiler =
             for decl in file.Declarations do
                 hs.UnionWith(decl.UsedNames)
             hs
-        //printfn "File: %A" file.Declarations
+
         let ctx =
           { File = file
             UsedNames = { RootScope = HashSet file.UsedNamesInRootScope
