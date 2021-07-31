@@ -1,5 +1,4 @@
-/// AUTOMATICALLY GENERATED - DO NOT TOUCH!
-module Fable.Transforms.ReplacementsInject
+module Fable.Python.ReplacementsInject
 
 let fableReplacementsModules =
   Map [
@@ -102,4 +101,3 @@ let fableReplacementsModules =
       "ofSeq", (Types.comparer, 0)
     ]
   ]
-

@@ -1,5 +1,5 @@
 // fsharplint:disable InterfaceNames
-module Fable.Transforms.BabelPrinter
+module Fable.Javascript.Printer
 
 open System
 open Fable

@@ -96,7 +96,7 @@ module Unused =
             if pathExists "./bin/tools/reportgenerator" then "bin/tools/reportgenerator"
             else "bin\\tools\\reportgenerator.exe"
 
-        // if not (pathExists "build/fable-library") then
+        // if not (pathExists "build/fable-library-js") then
         //     buildLibraryJs()
 
         cleanDirs ["build/tests"]
@@ -116,8 +116,9 @@ module Unused =
 let buildLibraryJsWithOptions (opts: {| watch: bool |}) =
     let baseDir = __SOURCE_DIRECTORY__
 
-    let projectDir = baseDir </> "src/fable-library"
-    let buildDir = baseDir </> "build/fable-library"
+    let projectDirFSharp = baseDir </> "src/Fable.Library"
+    let projectDirTypescript = baseDir </> "src/fable-library-js"
+    let buildDir = baseDir </> "build/fable-library-js"
     let fableOpts = [
         "--outDir " + buildDir
         "--fableLib " + buildDir
@@ -130,37 +131,37 @@ let buildLibraryJsWithOptions (opts: {| watch: bool |}) =
     cleanDirs [buildDir]
     runInDir baseDir "npm install"
     makeDirRecursive buildDir
-    copyFile (projectDir </> "package.json") buildDir
+    copyFile (projectDirTypescript </> "package.json") buildDir
 
     if opts.watch then
         Async.Parallel [
             runNpmScriptAsync "tsc" [
-                "--project " + projectDir
+                "--project " + projectDirTypescript
                 "--watch"
             ]
-            runFableWithArgsAsync projectDir fableOpts
+            runFableWithArgsAsync projectDirFSharp fableOpts
         ] |> runAsyncWorkflow
     else
-        runTSLint projectDir
-        runTypeScript projectDir
-        runFableWithArgs projectDir fableOpts
+        runTSLint projectDirTypescript
+        runTypeScript projectDirTypescript
+        runFableWithArgs projectDirFSharp fableOpts
 
 let buildLibraryJs() = buildLibraryJsWithOptions {| watch = false |}
 let watchLibraryJs() = buildLibraryJsWithOptions {| watch = true |}
 
 let buildLibraryJsIfNotExists() =
     let baseDir = __SOURCE_DIRECTORY__
-    if not (pathExists (baseDir </> "build/fable-library")) then
+    if not (pathExists (baseDir </> "build/fable-library-js")) then
         buildLibraryJs()
 
 let buildLibraryTs() =
-    let projectDir = "src/fable-library"
+    let projectDir = "src/fable-library-js"
     let buildDirTs = "build/fable-library-ts"
     let buildDirJs = "build/fable-library-js"
 
     cleanDirs [buildDirTs; buildDirJs]
 
-    runFableWithArgs projectDir [
+    runFableWithArgs "src/Fable.Library" [
         "--outDir " + buildDirTs
         "--fableLib " + buildDirTs
         "--lang TypeScript"
@@ -230,7 +231,7 @@ let buildStandalone (opts: {| minify: bool; watch: bool |}) =
     printfn "Building standalone%s..." (if opts.minify then "" else " (no minification)")
 
     let projectDir = "src/fable-standalone/src"
-    let libraryDir = "build/fable-library"
+    let libraryDir = "build/fable-library-js"
     let buildDir = "build/fable-standalone"
     let distDir = "src/fable-standalone/dist"
 
@@ -335,7 +336,7 @@ let buildCompilerJs(minify: bool) =
         run $"npx terser {distDir}/app.js -o {distDir}/app.min.js --mangle --compress"
 
     // Copy fable-library
-    copyDirRecursive ("build/fable-library") (distDir </> "fable-library")
+    copyDirRecursive ("build/fable-library-js") (distDir </> "fable-library")
     // Copy fable-metadata
     copyDirRecursive ("src/fable-metadata/lib") (distDir </> "fable-metadata")
 
@@ -624,8 +625,8 @@ match argsLower with
     let pkgInstallCmd = buildLocalPackageWith (resolveDir "temp/pkg") "add package Fable.Core" (resolveDir "src/Fable.Core/Fable.Core.fsproj") ignore
     printfn $"\nFable.Core package has been created, use the following command to install it:\n    {pkgInstallCmd}\n"
 
-| ("watch-library")::_ -> watchLibraryJs()
-| ("fable-library"|"library")::_ -> buildLibraryJs()
+| ("watch-library-js"|"watch-library")::_ -> watchLibraryJs()
+| ("fable-library-js"|"library-js"|"fable-library"|"library")::_ -> buildLibraryJs()
 | ("fable-library-ts"|"library-ts")::_ -> buildLibraryTs()
 | ("fable-library-py"|"library-py")::_ -> buildLibraryPy()
 | ("fable-compiler-js"|"compiler-js")::_ -> buildCompilerJs(minify)

@@ -1,4 +1,4 @@
-module rec Fable.Transforms.Fable2Python
+module rec Fable.Python.Fable2Python
 
 open Fable
 open Fable.AST

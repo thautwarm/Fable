@@ -1,4 +1,4 @@
-﻿module Fable.Transforms.Fable2Php
+﻿module Fable.Php.Fable2Php
 
 open System.IO
 open Fable

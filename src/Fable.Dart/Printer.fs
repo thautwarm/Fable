@@ -1,4 +1,4 @@
-﻿module Fable.Transforms.Dart.DartPrinter
+﻿module Fable.Dart.Printer
 
 open System
 open Fable.AST

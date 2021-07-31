@@ -38,7 +38,7 @@
   <ItemGroup>
     <!-- <PackageReference Include="FSharp.Core" Version="5.0.1" /> -->
     <Reference Include="../../lib/fcs/FSharp.Core.dll" />
-    <Reference Include="../../lib/fcs/FSharp.Compiler.Service.dll" />
+    <!-- <Reference Include="../../lib/fcs/FSharp.Compiler.Service.dll" /> -->
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Dotnet.ProjInfo" Version="0.44.0" />

@@ -1,4 +1,4 @@
-module rec Fable.Transforms.Fable2Babel
+module rec Fable.Javascript.Fable2Babel
 
 open Fable
 open Fable.AST

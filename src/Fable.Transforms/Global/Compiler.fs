@@ -42,7 +42,16 @@ type InlineExpr =
 type CompilerPlugins =
     { MemberDeclarationPlugins: Map<Fable.EntityRef, System.Type> }
 
-type Compiler =
+type Language =
+    interface end
+
+type Context =
+    interface end
+
+type Library =
+    abstract TryBaseConstructor: Compiler * Context * Entity * argTypes: Type list * genArgs: Type list * args: Expr list
+
+and Compiler =
     abstract LibraryDir: string
     abstract CurrentFile: string
     abstract OutputDir: string option

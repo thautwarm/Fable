@@ -1,5 +1,5 @@
 // fsharplint:disable InterfaceNames
-module Fable.Transforms.PythonPrinter
+module Fable.Python.Printer
 
 open System
 open Fable

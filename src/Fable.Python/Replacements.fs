@@ -1,5 +1,5 @@
 [<RequireQualifiedAccess>]
-module Fable.Transforms.Replacements
+module Fable.Python.Replacements
 
 #nowarn "1182"
 
