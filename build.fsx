@@ -62,7 +62,7 @@ module Util =
         runFableWithArgs projectDir []
 
     let runMocha testDir =
-        runNpmScript "mocha" [$"{testDir} -r esm --reporter dot -t 10000"]
+        runNpmScript "mocha" [$"{testDir} --reporter dot -t 10000"]
 
     let resolveDir dir =
         __SOURCE_DIRECTORY__ </> dir
